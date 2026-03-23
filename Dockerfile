@@ -1,22 +1,14 @@
 # =============================================================================
-# 3DGRUT API — Docker Image
+# 3DGRUT API — Docker Image (no conda)
 #
-# Base image    : nvidia/cuda (includes nvcc, cuDNN)
-# Python        : 3.11 (deadsnakes PPA)
-# PyTorch       : 2.7+ with cu128 (sm_120 / Blackwell support)
-#
-# Endpoints:
-#   POST /jobs                  — Upload video/images, create reconstruction job
-#   GET  /jobs/:id              — Get job status
-#   GET  /jobs/:id/events       — SSE progress stream
-#   WS   /jobs/:id/preview      — WebSocket live preview
-#   GET  /jobs/:id/artifacts    — List/download output files
-#   GET  /health
+# Base: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
+#   - nvcc, CUDA toolkit, cuDNN all included
+#   - Python 3.11 via deadsnakes PPA
+#   - PyTorch installed via pip (cu128 wheels)
+#   - Kaolin built from source
 #
 # Build:
 #   docker compose up --build -d
-#
-# NOTE: First build compiles CUDA extensions (~20-40 min).
 # =============================================================================
 
 FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
@@ -46,9 +38,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     FORCE_CUDA=1 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
-    HF_HOME=/hf_cache
+    HF_HOME=/hf_cache \
+    CC=/usr/bin/gcc-11 \
+    CXX=/usr/bin/g++-11
 
-# ── apt proxy config (only takes effect if http_proxy ARG is set) ───────────
+# ── apt proxy config ───────────────────────────────────────────────────────
 RUN if [ -n "${http_proxy}" ]; then \
       printf 'Acquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' \
         "${http_proxy}" "${https_proxy}" \
@@ -57,6 +51,7 @@ RUN if [ -n "${http_proxy}" ]; then \
 
 # ── System packages ────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # deadsnakes PPA for Python 3.11
     software-properties-common \
     && add-apt-repository -y ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
@@ -64,6 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-dev \
     python3.11-venv \
+    python3.11-distutils \
     # Build tools
     build-essential \
     gcc-11 g++-11 \
@@ -83,26 +79,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Python 3.11 as default + pip ────────────────────────────────────────────
+# ── Python 3.11 as default ──────────────────────────────────────────────────
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
-    && python -m ensurepip --upgrade \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && python -m pip install --upgrade --no-cache-dir pip setuptools wheel
 
-# ── Force gcc-11 for nvcc compatibility ─────────────────────────────────────
-ENV CC=/usr/bin/gcc-11 \
-    CXX=/usr/bin/g++-11
+# =============================================================================
+# 3DGRUT core dependencies (replaces conda + install_env.sh)
+# =============================================================================
 
-# ── PyTorch 2.7+ with CUDA 12.8 ────────────────────────────────────────────
+# ── PyTorch (cu128 nightly — first to support sm_120 Blackwell) ─────────────
 RUN pip install --no-cache-dir \
     --pre torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/nightly/cu128
-
-RUN pip install --no-cache-dir --force-reinstall "numpy<2"
+    --index-url https://download.pytorch.org/whl/nightly/cu128 \
+    && pip install --no-cache-dir --force-reinstall "numpy<2"
 
 # ── Kaolin (build from source for CUDA 12.8) ───────────────────────────────
-WORKDIR /tmp/kaolin
-RUN git clone --recursive https://github.com/NVIDIAGameWorks/kaolin.git . \
+RUN cd /tmp \
+    && git clone --recursive https://github.com/NVIDIAGameWorks/kaolin.git \
+    && cd kaolin \
     && pip install --no-cache-dir ninja imageio imageio-ffmpeg \
     && pip install --no-cache-dir \
         -r tools/viz_requirements.txt \
@@ -111,7 +107,7 @@ RUN git clone --recursive https://github.com/NVIDIAGameWorks/kaolin.git . \
     && IGNORE_TORCH_VER=1 python setup.py install \
     && cd / && rm -rf /tmp/kaolin
 
-# ── 3DGRUT source + dependencies ───────────────────────────────────────────
+# ── 3DGRUT source code + Python deps ───────────────────────────────────────
 WORKDIR /workspace
 COPY . .
 
@@ -119,20 +115,19 @@ RUN git submodule update --init --recursive \
     && pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir -e .
 
-# ── API Layer: Python dependencies ──────────────────────────────────────────
+# =============================================================================
+# API Layer
+# =============================================================================
+
 COPY requirements-api.txt /workspace/requirements-api.txt
 RUN pip install --no-cache-dir -r /workspace/requirements-api.txt
 
-# ── API Layer: source code ──────────────────────────────────────────────────
 COPY api/ /workspace/api/
 
-# Create mount points
 RUN mkdir -p /workspace/data /workspace/logs /hf_cache
 
-# ── Port ────────────────────────────────────────────────────────────────────
 EXPOSE 8191
 
-# ── Health check ────────────────────────────────────────────────────────────
 HEALTHCHECK \
     --interval=30s \
     --timeout=15s \
@@ -140,5 +135,4 @@ HEALTHCHECK \
     --retries=5 \
     CMD curl -f http://localhost:8191/health || exit 1
 
-# ── Entrypoint ──────────────────────────────────────────────────────────────
 CMD ["python", "api/main.py"]
