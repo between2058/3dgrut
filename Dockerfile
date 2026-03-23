@@ -112,7 +112,7 @@ WORKDIR /workspace
 COPY . .
 
 RUN git submodule update --init --recursive \
-    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir --no-build-isolation -r requirements.txt \
     && pip install --no-cache-dir --no-build-isolation -e .
 
 # =============================================================================
