@@ -23,6 +23,10 @@ services:
       dockerfile: Dockerfile
       args:
         CUDA_VERSION: "${CUDA_VERSION:-11.8.0}"
+        MAX_JOBS: "${MAX_JOBS:-4}"
+        http_proxy: "${HTTP_PROXY:-}"
+        https_proxy: "${HTTPS_PROXY:-}"
+        no_proxy: "${NO_PROXY:-localhost,127.0.0.1}"
 
     container_name: 3dgrut-api
 
@@ -44,6 +48,13 @@ services:
       - THREEDGRUT_PORT=8191
       - THREEDGRUT_HOST=0.0.0.0
       - THREEDGRUT_MAX_GPU_JOBS=${THREEDGRUT_MAX_GPU_JOBS:-1}
+      # Runtime proxy (for model downloads inside container)
+      - http_proxy=${HTTP_PROXY:-}
+      - https_proxy=${HTTPS_PROXY:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - no_proxy=${NO_PROXY:-localhost,127.0.0.1}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
 
     deploy:
       resources:

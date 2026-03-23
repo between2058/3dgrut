@@ -1,62 +1,108 @@
+# =============================================================================
+# 3DGRUT API — Docker Image
+#
+# Target hardware : NVIDIA GPU with CUDA support
+# Python          : 3.11 (via Miniconda)
+#
+# Endpoints:
+#   POST /jobs                  — Upload video/images, create reconstruction job
+#   GET  /jobs/:id              — Get job status
+#   GET  /jobs/:id/events       — SSE progress stream
+#   WS   /jobs/:id/preview      — WebSocket live preview
+#   GET  /jobs/:id/artifacts    — List/download output files
+#   GET  /health
+#
+# Build:
+#   docker compose up --build -d
+#
+# NOTE: First build compiles CUDA extensions via install_env.sh (~30-60 min).
+# =============================================================================
+
 FROM ubuntu:24.04
 
+# ── Build-time arguments ────────────────────────────────────────────────────
 ARG CUDA_VERSION=11.8.0
-ENV CUDA_VERSION=${CUDA_VERSION}
-ENV DEBIAN_FRONTEND=noninteractive
+ARG MAX_JOBS=4
+
+# ── Proxy (build-time + runtime) ────────────────────────────────────────────
+ARG http_proxy=""
+ARG https_proxy=""
+ARG no_proxy="localhost,127.0.0.1"
+
+ENV http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    HTTP_PROXY=${http_proxy} \
+    HTTPS_PROXY=${https_proxy} \
+    no_proxy=${no_proxy} \
+    NO_PROXY=${no_proxy}
+
+# ── Environment variables ───────────────────────────────────────────────────
+ENV CUDA_VERSION=${CUDA_VERSION} \
+    DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
+    FORCE_CUDA=1 \
+    MAX_JOBS=${MAX_JOBS}
+
+# ── apt proxy config (only takes effect if http_proxy ARG is set) ───────────
+RUN if [ -n "${http_proxy}" ]; then \
+      printf 'Acquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' \
+        "${http_proxy}" "${https_proxy}" \
+        > /etc/apt/apt.conf.d/99proxy; \
+    fi
+
+# ── System packages ────────────────────────────────────────────────────────
 RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated ca-certificates \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-    wget git \
-    curl \
+    && apt-get install -y --allow-unauthenticated ca-certificates \
+    && apt-get install -y -qq --no-install-recommends \
+    wget git curl \
     build-essential \
     gcc-11 g++-11 \
     libgl1-mesa-dev \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Miniconda ───────────────────────────────────────────────────────────────
 RUN curl -o ~/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-py311_25.1.1-2-Linux-x86_64.sh && \
     bash ~/miniconda.sh -b -p /opt/conda && \
     rm ~/miniconda.sh && \
-    /opt/conda/bin/conda install -y python=${PYTHON_VERSION} && \
     /opt/conda/bin/conda clean -ya
 ENV PATH=/opt/conda/bin:$PATH
 RUN conda init
 
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
-ENV FORCE_CUDA=1
-
-# # Make sure TORCH_CUDA_ARCH_LIST matches the pytorch wheel setting.
-# # Reference: https://github.com/pytorch/pytorch/blob/main/.ci/manywheel/build_cuda.sh#L54
-# #
-# # (cuda11) $ python -c "import torch; print(torch.version.cuda, torch.cuda.get_arch_list())"
-# # 11.8 ['sm_50', 'sm_60', 'sm_61', 'sm_70', 'sm_75', 'sm_80', 'sm_86', 'sm_37', 'sm_90', 'compute_37']
-# #
-# # (cuda12) $ python -c "import torch; print(torch.version.cuda, torch.cuda.get_arch_list())"
-# # 12.8 ['sm_75', 'sm_80', 'sm_86', 'sm_90', 'sm_100', 'sm_120', 'compute_120']
-# #
-# RUN if   [ "$CUDA_VERSION" = "11.8.0" ]; then                                                        \
-#       echo 'export TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;9.0"' >> /etc/profile.d/cuda_arch.sh;       \
-#     elif [ "$CUDA_VERSION" = "12.8.1" ]; then                                                        \
-#       echo 'export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;9.0;10.0;12.0"' >> /etc/profile.d/cuda_arch.sh; \
-#     fi
-
+# ── 3DGRUT core (CUDA extensions, PyTorch, Kaolin, etc.) ───────────────────
 WORKDIR /workspace
 COPY . .
 
 RUN CUDA_VERSION=$CUDA_VERSION bash ./install_env.sh 3dgrut WITH_GCC11
 RUN echo "conda activate 3dgrut" >> ~/.bashrc
 
-# === API Layer ===
+# ── API Layer: system packages ──────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     colmap ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# ── API Layer: Python dependencies ──────────────────────────────────────────
 COPY requirements-api.txt /workspace/requirements-api.txt
 RUN conda run -n 3dgrut pip install --no-cache-dir -r /workspace/requirements-api.txt
 
+# ── API Layer: source code ──────────────────────────────────────────────────
 COPY api/ /workspace/api/
 
+# Create mount points
+RUN mkdir -p /workspace/data /workspace/logs
+
+# ── Port ────────────────────────────────────────────────────────────────────
 EXPOSE 8191
 
+# ── Health check ────────────────────────────────────────────────────────────
+HEALTHCHECK \
+    --interval=30s \
+    --timeout=15s \
+    --start-period=120s \
+    --retries=5 \
+    CMD curl -f http://localhost:8191/health || exit 1
+
+# ── Entrypoint ──────────────────────────────────────────────────────────────
 CMD ["conda", "run", "--no-capture-output", "-n", "3dgrut", "python", "api/main.py"]
