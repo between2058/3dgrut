@@ -113,7 +113,7 @@ COPY . .
 
 RUN git submodule update --init --recursive \
     && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir -e .
+    && pip install --no-cache-dir --no-build-isolation -e .
 
 # =============================================================================
 # API Layer
