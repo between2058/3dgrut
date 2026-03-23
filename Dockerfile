@@ -135,4 +135,5 @@ HEALTHCHECK \
     --retries=5 \
     CMD curl -f http://localhost:8191/health || exit 1
 
+ENV PYTHONPATH=/workspace
 CMD ["python", "api/main.py"]
