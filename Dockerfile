@@ -1,8 +1,9 @@
 # =============================================================================
 # 3DGRUT API — Docker Image
 #
-# Target hardware : NVIDIA GPU with CUDA support
-# Python          : 3.11 (via Miniconda)
+# Base image    : nvidia/cuda (includes nvcc, cuDNN)
+# Python        : 3.11 (deadsnakes PPA)
+# PyTorch       : 2.7+ with cu128 (sm_120 / Blackwell support)
 #
 # Endpoints:
 #   POST /jobs                  — Upload video/images, create reconstruction job
@@ -15,13 +16,12 @@
 # Build:
 #   docker compose up --build -d
 #
-# NOTE: First build compiles CUDA extensions via install_env.sh (~30-60 min).
+# NOTE: First build compiles CUDA extensions (~20-40 min).
 # =============================================================================
 
-FROM ubuntu:24.04
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
 
 # ── Build-time arguments ────────────────────────────────────────────────────
-ARG CUDA_VERSION=11.8.0
 ARG MAX_JOBS=4
 
 # ── Proxy (build-time + runtime) ────────────────────────────────────────────
@@ -37,13 +37,16 @@ ENV http_proxy=${http_proxy} \
     NO_PROXY=${no_proxy}
 
 # ── Environment variables ───────────────────────────────────────────────────
-ENV CUDA_VERSION=${CUDA_VERSION} \
-    DEBIAN_FRONTEND=noninteractive \
+ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    CUDA_HOME=/usr/local/cuda \
+    TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;9.0;10.0;12.0" \
+    MAX_JOBS=${MAX_JOBS} \
+    FORCE_CUDA=1 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
-    FORCE_CUDA=1 \
-    MAX_JOBS=${MAX_JOBS}
+    HF_HOME=/hf_cache
 
 # ── apt proxy config (only takes effect if http_proxy ARG is set) ───────────
 RUN if [ -n "${http_proxy}" ]; then \
@@ -53,45 +56,78 @@ RUN if [ -n "${http_proxy}" ]; then \
     fi
 
 # ── System packages ────────────────────────────────────────────────────────
-RUN apt-get update \
-    && apt-get install -y --allow-unauthenticated ca-certificates \
-    && apt-get install -y -qq --no-install-recommends \
-    wget git curl \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    # Python 3.11
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    # Build tools
     build-essential \
     gcc-11 g++-11 \
+    cmake \
+    ninja-build \
+    git \
+    wget \
+    curl \
+    # OpenGL / graphics
     libgl1-mesa-dev \
     libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    # Pipeline tools
+    colmap \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Miniconda ───────────────────────────────────────────────────────────────
-RUN curl -o ~/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-py311_25.1.1-2-Linux-x86_64.sh && \
-    bash ~/miniconda.sh -b -p /opt/conda && \
-    rm ~/miniconda.sh && \
-    /opt/conda/bin/conda clean -ya
-ENV PATH=/opt/conda/bin:$PATH
-RUN conda init
+# ── Python 3.11 as default + pip ────────────────────────────────────────────
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+    && python -m ensurepip --upgrade \
+    && python -m pip install --upgrade --no-cache-dir pip setuptools wheel
 
-# ── 3DGRUT core (CUDA extensions, PyTorch, Kaolin, etc.) ───────────────────
+# ── Force gcc-11 for nvcc compatibility ─────────────────────────────────────
+ENV CC=/usr/bin/gcc-11 \
+    CXX=/usr/bin/g++-11
+
+# ── PyTorch 2.7+ with CUDA 12.8 ────────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    --pre torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/nightly/cu128
+
+RUN pip install --no-cache-dir --force-reinstall "numpy<2"
+
+# ── Kaolin (build from source for CUDA 12.8) ───────────────────────────────
+WORKDIR /tmp/kaolin
+RUN git clone --recursive https://github.com/NVIDIAGameWorks/kaolin.git . \
+    && pip install --no-cache-dir ninja imageio imageio-ffmpeg \
+    && pip install --no-cache-dir \
+        -r tools/viz_requirements.txt \
+        -r tools/requirements.txt \
+        -r tools/build_requirements.txt \
+    && IGNORE_TORCH_VER=1 python setup.py install \
+    && cd / && rm -rf /tmp/kaolin
+
+# ── 3DGRUT source + dependencies ───────────────────────────────────────────
 WORKDIR /workspace
 COPY . .
 
-RUN CUDA_VERSION=$CUDA_VERSION bash ./install_env.sh 3dgrut WITH_GCC11
-RUN echo "conda activate 3dgrut" >> ~/.bashrc
-
-# ── API Layer: system packages ──────────────────────────────────────────────
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    colmap ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+RUN git submodule update --init --recursive \
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -e .
 
 # ── API Layer: Python dependencies ──────────────────────────────────────────
 COPY requirements-api.txt /workspace/requirements-api.txt
-RUN conda run -n 3dgrut pip install --no-cache-dir -r /workspace/requirements-api.txt
+RUN pip install --no-cache-dir -r /workspace/requirements-api.txt
 
 # ── API Layer: source code ──────────────────────────────────────────────────
 COPY api/ /workspace/api/
 
 # Create mount points
-RUN mkdir -p /workspace/data /workspace/logs
+RUN mkdir -p /workspace/data /workspace/logs /hf_cache
 
 # ── Port ────────────────────────────────────────────────────────────────────
 EXPOSE 8191
@@ -105,4 +141,4 @@ HEALTHCHECK \
     CMD curl -f http://localhost:8191/health || exit 1
 
 # ── Entrypoint ──────────────────────────────────────────────────────────────
-CMD ["conda", "run", "--no-capture-output", "-n", "3dgrut", "python", "api/main.py"]
+CMD ["python", "api/main.py"]

@@ -22,7 +22,6 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        CUDA_VERSION: "${CUDA_VERSION:-11.8.0}"
         MAX_JOBS: "${MAX_JOBS:-4}"
         http_proxy: "${HTTP_PROXY:-}"
         https_proxy: "${HTTPS_PROXY:-}"
