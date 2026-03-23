@@ -13,14 +13,14 @@ class JobStore:
     def __init__(self, data_dir: str):
         self.storage = StorageManager(data_dir)
 
-    def create(self, user_id: str | None = None) -> dict:
+    def create(self, user_id: str | None = None, camera_model: str | None = None) -> dict:
         job_id = uuid.uuid4().hex[:12]
         now = datetime.now(TW_TZ).isoformat()
         job = {
             "id": job_id,
             "status": JobStatus.CREATED,
             "user_id": user_id,
-            "camera_model": None,
+            "camera_model": camera_model,
             "error": None,
             "artifacts": [],
             "created_at": now,

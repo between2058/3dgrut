@@ -65,7 +65,7 @@ class ColmapSfmStep(BaseStep):
 
     async def run(self, job_id: str, job: dict, context: dict) -> StepResult:
         job_dir = self.data_dir / job_id
-        camera_model = context.get("camera_model", "SIMPLE_RADIAL")
+        camera_model = job.get("camera_model") or context.get("camera_model", "SIMPLE_RADIAL")
 
         image_path = str(job_dir / "images")
         database_path = str(job_dir / "database.db")

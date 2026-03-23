@@ -3,9 +3,17 @@ import logging
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Request
+from enum import Enum
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
 
 from api.models import JobResponse, CameraModelRequest, JobStatus
+
+
+class CameraModelEnum(str, Enum):
+    SIMPLE_RADIAL = "SIMPLE_RADIAL"
+    OPENCV_FISHEYE = "OPENCV_FISHEYE"
+    PINHOLE = "PINHOLE"
+    SIMPLE_PINHOLE = "SIMPLE_PINHOLE"
 from api.pipeline.job_store import JobStore
 
 router = APIRouter()
@@ -40,13 +48,20 @@ def _get_store(request: Request) -> JobStore:
 
 
 @router.post("/jobs", status_code=201, response_model=JobResponse)
-async def create_job(request: Request, file: UploadFile = File(...)):
+async def create_job(
+    request: Request,
+    file: UploadFile = File(...),
+    camera_model: CameraModelEnum = Form(
+        default=CameraModelEnum.SIMPLE_RADIAL,
+        description="一般鏡頭=SIMPLE_RADIAL, 廣角/魚眼=OPENCV_FISHEYE",
+    ),
+):
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXT:
         raise HTTPException(422, f"Unsupported format: {ext}. Allowed: {ALLOWED_EXT}")
 
     store = _get_store(request)
-    job = store.create(user_id=None)  # TODO: extract from auth header
+    job = store.create(user_id=None, camera_model=camera_model.value)
     job_id = job["id"]
 
     input_dir = Path(request.app.state.settings.data_dir) / job_id / "input"
@@ -55,7 +70,7 @@ async def create_job(request: Request, file: UploadFile = File(...)):
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    logger.info(f"Job {job_id} created: {file.filename} ({ext})")
+    logger.info(f"Job {job_id} created: {file.filename} ({ext}), camera={camera_model.value}")
     asyncio.create_task(_run_pipeline(request.app, job_id))
     return job
 

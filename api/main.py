@@ -22,7 +22,6 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     from api.pipeline.queue import JobQueue
     from api.pipeline.orchestrator import PipelineOrchestrator
     from api.pipeline.steps.extract_frames import ExtractFramesStep
-    from api.pipeline.steps.detect_camera import DetectCameraStep
     from api.pipeline.steps.sfm import ColmapSfmStep
     from api.pipeline.steps.train_gs import TrainGsStep
     from api.pipeline.steps.mesh import MeshStep
@@ -41,7 +40,6 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 num_frames=s.sharp_frames_num,
                 method=s.sharp_frames_method,
             ),
-            DetectCameraStep(data_dir=s.data_dir, default_model=s.default_camera_model),
             ColmapSfmStep(data_dir=s.data_dir),
             TrainGsStep(data_dir=s.data_dir, config=s.train_config),
             MeshStep(data_dir=s.data_dir, resolution=s.mesh_resolution),
