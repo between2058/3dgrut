@@ -17,6 +17,9 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     app.state.settings = s
     app.state.gpu_lock = gpu_lock
 
+    from api.pipeline.event_bus import EventBus
+    app.state.event_bus = EventBus()
+
     origins = [o.strip() for o in s.allowed_origins.split(",")]
     app.add_middleware(
         CORSMiddleware,
