@@ -18,7 +18,35 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     app.state.gpu_lock = gpu_lock
 
     from api.pipeline.event_bus import EventBus
+    from api.pipeline.job_store import JobStore
+    from api.pipeline.queue import JobQueue
+    from api.pipeline.orchestrator import PipelineOrchestrator
+    from api.pipeline.steps.extract_frames import ExtractFramesStep
+    from api.pipeline.steps.detect_camera import DetectCameraStep
+    from api.pipeline.steps.sfm import ColmapSfmStep
+    from api.pipeline.steps.train_gs import TrainGsStep
+    from api.pipeline.steps.mesh import MeshStep
+
     app.state.event_bus = EventBus()
+
+    app.state.job_store = JobStore(s.data_dir)
+    app.state.job_queue = JobQueue(max_gpu_jobs=s.max_gpu_jobs)
+    app.state.orchestrator = PipelineOrchestrator(
+        store=app.state.job_store,
+        bus=app.state.event_bus,
+        steps=[
+            ExtractFramesStep(
+                data_dir=s.data_dir,
+                fps=s.sharp_frames_fps,
+                num_frames=s.sharp_frames_num,
+                method=s.sharp_frames_method,
+            ),
+            DetectCameraStep(data_dir=s.data_dir, default_model=s.default_camera_model),
+            ColmapSfmStep(data_dir=s.data_dir),
+            TrainGsStep(data_dir=s.data_dir, config=s.train_config),
+            MeshStep(data_dir=s.data_dir, resolution=s.mesh_resolution),
+        ],
+    )
 
     origins = [o.strip() for o in s.allowed_origins.split(",")]
     app.add_middleware(

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import shutil
 from pathlib import Path
@@ -9,6 +10,25 @@ from api.pipeline.job_store import JobStore
 
 router = APIRouter()
 logger = logging.getLogger("api")
+
+async def _run_pipeline(app, job_id: str):
+    queue = app.state.job_queue
+    orchestrator = app.state.orchestrator
+    bus = app.state.event_bus
+    store = app.state.job_store
+
+    pos = queue.position(job_id)
+    if pos > 0:
+        store.update_status(job_id, "queued")
+        await bus.publish(job_id, {
+            "type": "queued",
+            "position": pos,
+            "label": f"排隊中，前面還有 {pos} 個任務...",
+        })
+
+    async with queue.acquire_gpu(job_id):
+        await orchestrator.run_pipeline(job_id)
+
 
 ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
@@ -36,6 +56,7 @@ async def create_job(request: Request, file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, f)
 
     logger.info(f"Job {job_id} created: {file.filename} ({ext})")
+    asyncio.create_task(_run_pipeline(request.app, job_id))
     return job
 
 
