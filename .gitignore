@@ -34,3 +34,8 @@ results/
 thirdparty/ncore/
 
 playground/assets/
+
+# Local environment
+.env
+logs/
+data/

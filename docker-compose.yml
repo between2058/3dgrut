@@ -1,0 +1,57 @@
+# =============================================================================
+# 3DGRUT API — Docker Compose
+#
+# Quick start:
+#   cp .env.example .env
+#   vim .env              # set paths for THIS machine
+#   docker compose up --build -d
+#
+# Logs:
+#   docker compose logs -f
+#
+# Swagger UI:
+#   http://localhost:8191/docs
+#
+# Health check:
+#   curl http://localhost:8191/health
+# =============================================================================
+
+services:
+  3dgrut-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CUDA_VERSION: "${CUDA_VERSION:-11.8.0}"
+
+    container_name: 3dgrut-api
+
+    ports:
+      - "${THREEDGRUT_PORT:-8191}:8191"
+
+    volumes:
+      # Persistent job data (uploads, training outputs, artifacts)
+      - ${THREEDGRUT_DATA_PATH:-./data}:/workspace/data:rw
+      # HuggingFace model cache (shared with other AI services)
+      - ${HF_CACHE_HOST_PATH:-./hf_cache}:/hf_cache:rw
+      # Logs
+      - ./logs:/workspace/logs:rw
+
+    environment:
+      - HF_HOME=/hf_cache
+      - THREEDGRUT_DATA_DIR=/workspace/data
+      - THREEDGRUT_LOG_DIR=/workspace/logs
+      - THREEDGRUT_PORT=8191
+      - THREEDGRUT_HOST=0.0.0.0
+      - THREEDGRUT_MAX_GPU_JOBS=${THREEDGRUT_MAX_GPU_JOBS:-1}
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${THREEDGRUT_GPU_ID:-0}"]
+              capabilities: [gpu]
+
+    shm_size: "8gb"
+    restart: unless-stopped
