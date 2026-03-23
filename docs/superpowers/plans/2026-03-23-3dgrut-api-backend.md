@@ -4,9 +4,9 @@
 
 **Goal:** Add a FastAPI service layer to the 3dgrut repo that orchestrates the full 3D reconstruction pipeline (sharp-frames → COLMAP → 3dgrut train → frgs mesh) with real-time progress streaming.
 
-**Architecture:** FastAPI app in `api/` directory, using asyncio.Lock for GPU concurrency, Celery+Redis for background job execution, SSE for progress, WebSocket for live preview. Follows ai-services-unified patterns (TaiwanFormatter logging, health check, CORS).
+**Architecture:** FastAPI app in `api/` directory, using asyncio.Semaphore for GPU concurrency, asyncio background tasks for pipeline execution, SSE for progress, WebSocket for live preview. Follows ai-services-unified patterns (TaiwanFormatter logging, health check, CORS). Celery+Redis can replace asyncio queue in a future iteration if needed.
 
-**Tech Stack:** Python 3.11, FastAPI, Uvicorn, Celery, Redis, sharp-frames, COLMAP (binary), Pydantic v2
+**Tech Stack:** Python 3.11, FastAPI, Uvicorn, sharp-frames, COLMAP (binary), Pydantic v2
 
 **Spec:** `docs/superpowers/specs/2026-03-23-3dgrut-web-pipeline-design.md`
 
@@ -87,8 +87,6 @@ pydantic-settings>=2.0
 python-multipart>=0.0.9
 sse-starlette>=2.0.0
 websockets>=12.0
-celery[redis]>=5.4.0
-redis>=5.0.0
 sharp-frames>=0.3.1
 Pillow>=10.0.0
 exifread>=3.0.0
@@ -844,6 +842,11 @@ async def set_camera_model(job_id: str, body: CameraModelRequest, request: Reque
     except FileNotFoundError:
         raise HTTPException(404, "Job not found")
     logger.info(f"Job {job_id} camera model set to {body.model}")
+
+    # Resume the paused pipeline
+    orchestrator = request.app.state.orchestrator
+    orchestrator.resume(job_id)
+
     return job
 ```
 
@@ -928,8 +931,6 @@ logger = logging.getLogger("api")
 
 
 def _get_bus(request) -> EventBus:
-    if not hasattr(request.app.state, "event_bus"):
-        request.app.state.event_bus = EventBus()
     return request.app.state.event_bus
 
 
@@ -1109,9 +1110,17 @@ class PipelineOrchestrator:
         self.store = store
         self.bus = bus
         self.steps = steps
+        # Pause/resume signals per job (for camera model selection)
+        self._resume_events: dict[str, asyncio.Event] = {}
+
+    def resume(self, job_id: str):
+        """Called when user provides input (e.g. camera model). Resumes pipeline."""
+        event = self._resume_events.get(job_id)
+        if event:
+            event.set()
 
     async def run_pipeline(self, job_id: str):
-        context: dict = {}
+        context: dict = {"_bus": self.bus}  # Pass bus so steps can publish sub-progress
 
         for step in self.steps:
             job = self.store.get(job_id)
@@ -1147,6 +1156,24 @@ class PipelineOrchestrator:
                 return
 
             context.update(result.data)
+
+            # Handle pause: if step requests user input, wait for resume
+            if result.data.get("camera_select_required"):
+                self.store.update_status(job_id, JobStatus.CAMERA_SELECT_REQUIRED)
+                await self.bus.publish(job_id, {"type": "camera_select_required"})
+
+                resume_event = asyncio.Event()
+                self._resume_events[job_id] = resume_event
+                logger.info(f"Job {job_id}: paused, waiting for camera model selection")
+                await resume_event.wait()
+                del self._resume_events[job_id]
+
+                # Re-read job to get user-selected camera model
+                job = self.store.get(job_id)
+                context["camera_model"] = job.get("camera_model", "SIMPLE_RADIAL")
+                logger.info(f"Job {job_id}: resumed with camera_model={context['camera_model']}")
+                continue  # skip step_complete event, move to next step
+
             await self.bus.publish(job_id, {
                 "type": "step_complete",
                 "step": step.name,
@@ -1575,6 +1602,21 @@ class ColmapSfmStep(BaseStep):
 
         for cmd, step_name in commands:
             logger.info(f"Job {job_id}: running COLMAP {step_name}")
+
+            # Publish sub-step progress via event bus (passed in context)
+            bus = context.get("_bus")
+            if bus:
+                step_labels = {
+                    "sfm_feature": "正在分析圖片特徵...",
+                    "sfm_matching": "正在比對圖片...",
+                    "sfm_mapping": "正在建立空間點雲...",
+                }
+                await bus.publish(job_id, {
+                    "type": "progress",
+                    "step": step_name,
+                    "label": step_labels.get(step_name, ""),
+                })
+
             success, stderr = await run_colmap_command(cmd, step_name)
             if not success:
                 return StepResult(success=False, error=f"COLMAP {step_name} failed: {stderr[:500]}")
@@ -1675,14 +1717,37 @@ def build_train_command(
     ]
 
 
-async def run_training(cmd: list[str]) -> tuple[bool, str]:
+async def run_training(cmd: list[str], bus=None, job_id: str = "") -> tuple[bool, str]:
+    """Run training, streaming iteration progress via event bus if provided."""
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
-    return proc.returncode == 0, stderr.decode()
+
+    # Parse stdout line by line for progress (iteration, loss, PSNR)
+    stderr_lines = []
+    if proc.stdout and bus and job_id:
+        async for line in proc.stdout:
+            text = line.decode().strip()
+            # 3dgrut logs iteration progress like "Step 500/30000 | loss=0.032 | psnr=25.1"
+            if "Step" in text or "step" in text:
+                import re
+                match = re.search(r"[Ss]tep\s+(\d+)[/|](\d+)", text)
+                if match:
+                    iteration = int(match.group(1))
+                    total = int(match.group(2))
+                    await bus.publish(job_id, {
+                        "type": "progress",
+                        "step": "training",
+                        "label": "正在訓練 3D 模型...",
+                        "iteration": iteration,
+                        "total": total,
+                    })
+
+    stderr_data = await proc.stderr.read() if proc.stderr else b""
+    await proc.wait()
+    return proc.returncode == 0, stderr_data.decode()
 
 
 class TrainGsStep(BaseStep):
@@ -2148,6 +2213,17 @@ async def _run_pipeline(app, job_id: str):
     queue = app.state.job_queue
     orchestrator = app.state.orchestrator
     bus = app.state.event_bus
+    store = app.state.job_store
+
+    # Publish queue position while waiting for GPU
+    pos = queue.position(job_id)
+    if pos > 0:
+        store.update_status(job_id, "queued")
+        await bus.publish(job_id, {
+            "type": "queued",
+            "position": pos,
+            "label": f"排隊中，前面還有 {pos} 個任務...",
+        })
 
     async with queue.acquire_gpu(job_id):
         await orchestrator.run_pipeline(job_id)
@@ -2210,14 +2286,42 @@ git commit -m "feat(api): extend Dockerfile for API service layer"
 
 ---
 
-## Task 18: Final Integration Smoke Test
+## Task 18: Frames Preview Endpoint
+
+The frontend needs to display extracted frames. Add an endpoint to serve images from `data/{job_id}/images/`.
+
+**Files:**
+- Modify: `api/routes/artifacts.py`
+
+- [ ] **Step 1: Add frames endpoint**
+
+```python
+@router.get("/jobs/{job_id}/frames/{name}")
+async def get_frame(job_id: str, name: str, request: Request):
+    storage = StorageManager(request.app.state.settings.data_dir)
+    frame_path = storage.job_dir(job_id) / "images" / name
+    if not frame_path.exists():
+        raise HTTPException(404, "Frame not found")
+    return FileResponse(frame_path, filename=name)
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add api/routes/artifacts.py
+git commit -m "feat(api): add frames preview endpoint"
+```
+
+---
+
+## Task 19: Final Integration Smoke Test
 
 - [ ] **Step 1: Run the full test suite**
 
 Run: `python -m pytest api/tests/ -v --tb=short`
 Expected: All tests pass
 
-- [ ] **Step 2: Start the server locally** (if Redis is available)
+- [ ] **Step 2: Start the server locally**
 
 Run: `python api/main.py`
 Test: `curl http://localhost:8191/health`
@@ -2253,4 +2357,15 @@ git commit -m "feat(api): complete 3dgrut API backend v1"
 | 15 | GPU Queue | `api/pipeline/queue.py` |
 | 16 | Wire Together | `api/main.py`, `api/routes/jobs.py` |
 | 17 | Dockerfile | `Dockerfile` |
-| 18 | Smoke Test | All |
+| 18 | Frames Endpoint | `api/routes/artifacts.py` |
+| 19 | Smoke Test | All |
+
+## Deferred Items (v2)
+
+These items are recognized but deferred to a future iteration:
+- **Chunked upload (tus):** Current simple upload works for files under ~2 GB. For reliable 5 GB uploads, implement tus protocol.
+- **Authentication middleware:** Currently `user_id=None`. Add JWT validation middleware that extracts user from phidias proxy headers.
+- **Share token revocation:** Add `DELETE /jobs/:id/share/:token`. Move share store from in-memory dict to persistent storage (SQLite or Redis).
+- **Data retention cleanup:** Add background task using `asyncio` scheduler to clean up intermediate files after 7 days and completed jobs after 90 days.
+- **Training visual preview:** The current implementation streams iteration/loss text progress. Visual rendering (headless snapshot every 500 steps) requires modifying `Trainer3DGRUT` — defer to after core pipeline is working.
+- **COLMAP live point cloud:** File watcher on `points3D.bin` with WebSocket streaming — defer to after basic SfM progress text works.

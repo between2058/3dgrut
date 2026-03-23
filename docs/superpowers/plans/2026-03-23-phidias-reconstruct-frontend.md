@@ -510,7 +510,7 @@ import { CameraModelSelector } from './CameraModelSelector';
 import { ArtifactPanel } from './ArtifactPanel';
 
 export function ReconstructPanel() {
-  const { stage, job, cameraSelectRequired, setJob, setStage, handleSSEEvent, reset } = useReconStore();
+  const { stage, job, cameraSelectRequired, detectedCameraModel, setJob, setStage, handleSSEEvent, reset } = useReconStore();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleUpload = useCallback(async (file: File) => {
@@ -562,8 +562,12 @@ export function ReconstructPanel() {
         </div>
       )}
 
-      {cameraSelectRequired && (
-        <CameraModelSelector onSelect={handleCameraSelect} />
+      {(cameraSelectRequired || detectedCameraModel) && (
+        <CameraModelSelector
+          onSelect={handleCameraSelect}
+          detectedModel={detectedCameraModel}
+          required={cameraSelectRequired}
+        />
       )}
 
       {stage !== 'idle' && <ReconstructProgress />}
@@ -655,8 +659,12 @@ function formatDuration(ms: number): string {
 // src/components/reconstruct/CameraModelSelector.tsx
 'use client';
 
+import { useState } from 'react';
+
 interface Props {
   onSelect: (model: string) => void;
+  detectedModel: string | null;
+  required: boolean;
 }
 
 const OPTIONS = [
@@ -672,16 +680,47 @@ const OPTIONS = [
   },
 ];
 
-export function CameraModelSelector({ onSelect }: Props) {
+const MODEL_LABELS: Record<string, string> = {
+  SIMPLE_RADIAL: '一般鏡頭',
+  OPENCV_FISHEYE: '廣角/魚眼鏡頭',
+};
+
+export function CameraModelSelector({ onSelect, detectedModel, required }: Props) {
+  const [showOverride, setShowOverride] = useState(false);
+
+  // Auto-detected: show detected model with override option
+  if (detectedModel && !required && !showOverride) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between p-3 rounded-lg border border-green-500/30 bg-green-500/5">
+          <div>
+            <div className="text-sm text-green-400">已偵測到相機類型</div>
+            <div className="text-white font-medium">{MODEL_LABELS[detectedModel] ?? detectedModel}</div>
+          </div>
+          <button
+            onClick={() => setShowOverride(true)}
+            className="text-white/40 text-sm hover:text-white"
+          >
+            變更
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Not detected or user wants to override
   return (
     <div className="space-y-2">
       <p className="text-sm text-yellow-400">
-        無法自動偵測相機類型，請選擇：
+        {required ? '無法自動偵測相機類型，請選擇：' : '選擇相機類型：'}
       </p>
       {OPTIONS.map((opt) => (
         <button
           key={opt.model}
-          onClick={() => onSelect(opt.model)}
+          onClick={() => {
+            onSelect(opt.model);
+            setShowOverride(false);
+          }}
           className="w-full text-left p-3 rounded-lg border border-white/20 hover:border-purple-500 transition-colors"
         >
           <div className="text-white font-medium">{opt.label}</div>
@@ -744,7 +783,7 @@ export function FramePreview({ jobId }: Props) {
         {sampleFrames.map((name) => (
           <div key={name} className="aspect-video bg-white/5 rounded overflow-hidden">
             <img
-              src={`/phidias/3dgrut/jobs/${jobId}/frames/${name}`}
+              src={`/phidias/3dgrut/jobs/${jobId}/frames/${name}`}  // matches GET /jobs/:id/frames/:name backend endpoint
               alt={name}
               className="w-full h-full object-cover"
               loading="lazy"
