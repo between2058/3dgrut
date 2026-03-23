@@ -44,5 +44,19 @@ ENV FORCE_CUDA=1
 WORKDIR /workspace
 COPY . .
 
-RUN CUDA_VERSION=$CUDA_VERSION bash ./install_env.sh 3dgrut WITH_GCC11 
+RUN CUDA_VERSION=$CUDA_VERSION bash ./install_env.sh 3dgrut WITH_GCC11
 RUN echo "conda activate 3dgrut" >> ~/.bashrc
+
+# === API Layer ===
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    colmap ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-api.txt /workspace/requirements-api.txt
+RUN conda run -n 3dgrut pip install --no-cache-dir -r /workspace/requirements-api.txt
+
+COPY api/ /workspace/api/
+
+EXPOSE 8191
+
+CMD ["conda", "run", "--no-capture-output", "-n", "3dgrut", "python", "api/main.py"]
