@@ -40,7 +40,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
     HF_HOME=/hf_cache \
     CC=/usr/bin/gcc-11 \
-    CXX=/usr/bin/g++-11
+    CXX=/usr/bin/g++-11 \
+    QT_QPA_PLATFORM=offscreen \
+    DISPLAY=""
 
 # ── apt proxy config ───────────────────────────────────────────────────────
 RUN if [ -n "${http_proxy}" ]; then \
