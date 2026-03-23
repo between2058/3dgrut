@@ -100,7 +100,7 @@ RUN cd /tmp \
     && git clone --recursive https://github.com/NVIDIAGameWorks/kaolin.git \
     && cd kaolin \
     && pip install --no-cache-dir ninja imageio imageio-ffmpeg \
-    && pip install --no-cache-dir \
+    && pip install --no-cache-dir --ignore-installed \
         -r tools/viz_requirements.txt \
         -r tools/requirements.txt \
         -r tools/build_requirements.txt \
