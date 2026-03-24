@@ -71,15 +71,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     wget \
     curl \
-    # OpenGL / EGL / graphics
+    # Graphics libs
     libgl1-mesa-dev \
-    libegl1-mesa-dev \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender-dev \
     # Pipeline tools
-    colmap \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 

@@ -6,6 +6,7 @@ python-multipart>=0.0.9
 sse-starlette>=2.0.0
 websockets>=12.0
 sharp-frames>=0.3.1
+pycolmap>=0.6.0
 Pillow>=10.0.0
 exifread>=3.0.0
 httpx>=0.27.0

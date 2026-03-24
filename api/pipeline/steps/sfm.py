@@ -2,60 +2,34 @@ import asyncio
 import logging
 from pathlib import Path
 
+from starlette.concurrency import run_in_threadpool
+
 from api.models import JobStatus
 from api.pipeline.steps.base import BaseStep, StepResult
 
 logger = logging.getLogger("api")
 
 
-def build_colmap_commands(
-    image_path: str, database_path: str, output_path: str, camera_model: str
-) -> list[tuple[list[str], str]]:
-    return [
-        (
-            [
-                "colmap", "feature_extractor",
-                "--database_path", database_path,
-                "--image_path", image_path,
-                "--ImageReader.camera_model", camera_model,
-                "--ImageReader.single_camera", "1",
-                "--SiftExtraction.use_gpu", "1",
-                "--SiftExtraction.gpu_index", "0",
-            ],
-            "sfm_feature",
-        ),
-        (
-            [
-                "colmap", "exhaustive_matcher",
-                "--database_path", database_path,
-                "--SiftMatching.use_gpu", "1",
-                "--SiftMatching.gpu_index", "0",
-            ],
-            "sfm_matching",
-        ),
-        (
-            [
-                "colmap", "mapper",
-                "--database_path", database_path,
-                "--image_path", image_path,
-                "--output_path", output_path,
-            ],
-            "sfm_mapping",
-        ),
-    ]
+def run_pycolmap(image_path: str, database_path: str, output_path: str, camera_model: str):
+    """Run SfM pipeline using pycolmap (no GUI, no OpenGL)."""
+    import pycolmap
 
-
-async def run_colmap_command(cmd: list[str], step_name: str) -> tuple[bool, str]:
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    pycolmap.extract_features(
+        database_path=database_path,
+        image_path=image_path,
+        camera_mode=pycolmap.CameraMode.SINGLE,
+        camera_model=camera_model,
     )
-    stdout, stderr = await proc.communicate()
-    success = proc.returncode == 0
-    if not success:
-        logger.error(f"COLMAP {step_name} failed: {stderr.decode()}")
-    return success, stderr.decode()
+
+    pycolmap.match_exhaustive(database_path=database_path)
+
+    maps = pycolmap.incremental_mapping(
+        database_path=database_path,
+        image_path=image_path,
+        output_path=output_path,
+    )
+
+    return maps
 
 
 class ColmapSfmStep(BaseStep):
@@ -75,31 +49,34 @@ class ColmapSfmStep(BaseStep):
         database_path = str(job_dir / "database.db")
         output_path = str(job_dir / "sparse")
 
-        commands = build_colmap_commands(image_path, database_path, output_path, camera_model)
+        bus = context.get("_bus")
 
-        for cmd, step_name in commands:
-            logger.info(f"Job {job_id}: running COLMAP {step_name}")
-
-            bus = context.get("_bus")
+        try:
             if bus:
-                step_labels = {
-                    "sfm_feature": "正在分析圖片特徵...",
-                    "sfm_matching": "正在比對圖片...",
-                    "sfm_mapping": "正在建立空間點雲...",
-                }
                 await bus.publish(job_id, {
                     "type": "progress",
-                    "step": step_name,
-                    "label": step_labels.get(step_name, ""),
+                    "step": "sfm_feature",
+                    "label": "正在分析圖片特徵...",
                 })
 
-            success, stderr = await run_colmap_command(cmd, step_name)
-            if not success:
-                return StepResult(success=False, error=f"COLMAP {step_name} failed: {stderr[:500]}")
+            logger.info(f"Job {job_id}: running pycolmap SfM (camera={camera_model})")
+            maps = await run_in_threadpool(
+                run_pycolmap, image_path, database_path, output_path, camera_model
+            )
+
+            if bus:
+                await bus.publish(job_id, {
+                    "type": "step_complete",
+                    "step": "sfm",
+                })
+
+        except Exception as e:
+            logger.error(f"Job {job_id}: pycolmap failed: {e}")
+            return StepResult(success=False, error=f"SfM failed: {e}")
 
         points_file = job_dir / "sparse" / "0" / "points3D.bin"
         if not points_file.exists():
-            return StepResult(success=False, error="COLMAP produced no reconstruction")
+            return StepResult(success=False, error="SfM produced no reconstruction")
 
         logger.info(f"Job {job_id}: SfM completed")
         return StepResult(success=True, data={"sparse_path": str(job_dir / "sparse")})
