@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import shutil
 from pathlib import Path
 
 from api.models import JobStatus
@@ -27,13 +28,14 @@ def build_train_command(
 
 
 async def run_training(cmd: list[str], bus=None, job_id: str = "") -> tuple[bool, str]:
+    """Run training, streaming iteration progress via event bus if provided."""
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
 
-    stderr_lines = []
+    # Parse stdout for progress
     if proc.stdout and bus and job_id:
         async for line in proc.stdout:
             text = line.decode().strip()
@@ -67,36 +69,48 @@ class TrainGsStep(BaseStep):
 
     async def run(self, job_id: str, job: dict, context: dict) -> StepResult:
         cmd = build_train_command(job_id, str(self.data_dir), self.config)
-        logger.info(f"Job {job_id}: starting training")
+        logger.info(f"Job {job_id}: starting training with command: {' '.join(cmd)}")
 
         bus = context.get("_bus")
         success, stderr = await run_training(cmd, bus=bus, job_id=job_id)
         if not success:
-            return StepResult(success=False, error=f"Training failed: {stderr[:500]}")
+            # Show full error, not truncated
+            logger.error(f"Job {job_id}: training stderr:\n{stderr}")
+            return StepResult(success=False, error=f"Training failed: {stderr[-2000:]}")
 
+        # Find PLY output
         ply_path = self.data_dir / job_id / "output" / "model.ply"
         if not ply_path.exists():
+            # Scan runs/ for auto-generated PLY
             runs_dir = self.data_dir / job_id / "runs"
             found = list(runs_dir.rglob("*.ply")) if runs_dir.exists() else []
             if found:
-                import shutil
+                ply_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(found[0], ply_path)
                 logger.info(f"Job {job_id}: copied PLY from {found[0]}")
             else:
                 return StepResult(success=False, error="Training produced no PLY output")
 
+        # Try USDZ conversion (best-effort, don't fail if it doesn't work)
         usdz_path = self.data_dir / job_id / "output" / "model.usdz"
         if not usdz_path.exists():
-            logger.info(f"Job {job_id}: running ply_to_usd conversion")
-            usd_cmd = [
-                "python", "-m", "threedgrut.export.scripts.ply_to_usd",
-                str(ply_path),
-                "--output_file", str(usdz_path),
-            ]
-            usd_proc = await asyncio.create_subprocess_exec(
-                *usd_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            await usd_proc.communicate()
+            try:
+                logger.info(f"Job {job_id}: attempting ply_to_usd conversion")
+                usd_cmd = [
+                    "python", "-m", "threedgrut.export.scripts.ply_to_usd",
+                    str(ply_path),
+                    "--output_file", str(usdz_path),
+                ]
+                usd_proc = await asyncio.create_subprocess_exec(
+                    *usd_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                usd_stdout, usd_stderr = await usd_proc.communicate()
+                if usd_proc.returncode != 0:
+                    logger.warning(f"Job {job_id}: ply_to_usd failed (non-critical): {usd_stderr.decode()[-500:]}")
+            except Exception as e:
+                logger.warning(f"Job {job_id}: ply_to_usd exception (non-critical): {e}")
 
         logger.info(f"Job {job_id}: training completed")
         return StepResult(success=True)

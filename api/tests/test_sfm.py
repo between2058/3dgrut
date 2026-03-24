@@ -1,20 +1,6 @@
 import pytest
-from unittest.mock import patch, AsyncMock
-from api.pipeline.steps.sfm import ColmapSfmStep, build_colmap_commands
-
-
-def test_build_commands():
-    cmds = build_colmap_commands(
-        image_path="/data/job1/images",
-        database_path="/data/job1/database.db",
-        output_path="/data/job1/sparse",
-        camera_model="SIMPLE_RADIAL",
-    )
-    assert len(cmds) == 3
-    assert "feature_extractor" in cmds[0][0][1]
-    assert "exhaustive_matcher" in cmds[1][0][1]
-    assert "mapper" in cmds[2][0][1]
-    assert "SIMPLE_RADIAL" in " ".join(cmds[0][0])
+from unittest.mock import patch
+from api.pipeline.steps.sfm import ColmapSfmStep
 
 
 @pytest.mark.asyncio
@@ -27,13 +13,13 @@ async def test_sfm_step_runs(tmp_data_dir):
 
     step = ColmapSfmStep(data_dir=str(tmp_data_dir))
 
-    with patch("api.pipeline.steps.sfm.run_colmap_command", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = (True, "")
+    with patch("api.pipeline.steps.sfm.run_in_threadpool") as mock_run:
+        mock_run.return_value = {}
         result = await step.run(
             job_id,
-            {"id": job_id},
-            {"camera_model": "SIMPLE_RADIAL"},
+            {"id": job_id, "camera_model": "SIMPLE_RADIAL"},
+            {},
         )
 
     assert result.success
-    assert mock_run.call_count == 3
+    mock_run.assert_called_once()

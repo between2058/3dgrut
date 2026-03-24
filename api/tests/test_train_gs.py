@@ -12,8 +12,9 @@ def test_build_train_command():
     assert "train.py" in cmd[1]
     assert "apps/colmap_3dgut_mcmc.yaml" in " ".join(cmd)
     assert "export_ply.enabled=true" in cmd
-    assert "export_usdz.enabled=true" in cmd
     assert any("export_ply.path=" in arg for arg in cmd)
+    # export_usdz is NOT in config — handled by ply_to_usd fallback
+    assert "export_usdz.enabled=true" not in cmd
 
 
 @pytest.mark.asyncio
