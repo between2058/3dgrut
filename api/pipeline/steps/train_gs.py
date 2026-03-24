@@ -23,7 +23,6 @@ def build_train_command(
         f"experiment_name={job_id}",
         "export_ply.enabled=true",
         f"export_ply.path={job_path}/output/model.ply",
-        "export_usdz.enabled=true",
     ]
 
 
