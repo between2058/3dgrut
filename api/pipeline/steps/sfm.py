@@ -19,6 +19,8 @@ def build_colmap_commands(
                 "--image_path", image_path,
                 "--ImageReader.camera_model", camera_model,
                 "--ImageReader.single_camera", "1",
+                "--SiftExtraction.use_gpu", "1",
+                "--SiftExtraction.gpu_index", "0",
             ],
             "sfm_feature",
         ),
@@ -26,6 +28,8 @@ def build_colmap_commands(
             [
                 "colmap", "exhaustive_matcher",
                 "--database_path", database_path,
+                "--SiftMatching.use_gpu", "1",
+                "--SiftMatching.gpu_index", "0",
             ],
             "sfm_matching",
         ),

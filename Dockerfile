@@ -37,12 +37,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     MAX_JOBS=${MAX_JOBS} \
     FORCE_CUDA=1 \
     NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,video \
     HF_HOME=/hf_cache \
     CC=/usr/bin/gcc-11 \
     CXX=/usr/bin/g++-11 \
     QT_QPA_PLATFORM=offscreen \
-    DISPLAY=""
+    DISPLAY="" \
+    XDG_RUNTIME_DIR=/tmp/runtime-root
 
 # ── apt proxy config ───────────────────────────────────────────────────────
 RUN if [ -n "${http_proxy}" ]; then \
@@ -70,8 +71,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     wget \
     curl \
-    # OpenGL / graphics
+    # OpenGL / EGL / graphics
     libgl1-mesa-dev \
+    libegl1-mesa-dev \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -126,7 +128,7 @@ RUN pip install --no-cache-dir -r /workspace/requirements-api.txt
 
 COPY api/ /workspace/api/
 
-RUN mkdir -p /workspace/data /workspace/logs /hf_cache
+RUN mkdir -p /workspace/data /workspace/logs /hf_cache /tmp/runtime-root
 
 EXPOSE 8191
 
