@@ -16,7 +16,6 @@ def run_pycolmap(image_path: str, database_path: str, output_path: str, camera_m
 
     reader_options = pycolmap.ImageReaderOptions()
     reader_options.camera_model = camera_model
-    reader_options.single_camera = True
 
     pycolmap.extract_features(
         database_path=database_path,
