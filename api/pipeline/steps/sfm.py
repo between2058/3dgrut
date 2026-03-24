@@ -14,11 +14,15 @@ def run_pycolmap(image_path: str, database_path: str, output_path: str, camera_m
     """Run SfM pipeline using pycolmap (no GUI, no OpenGL)."""
     import pycolmap
 
+    reader_options = pycolmap.ImageReaderOptions()
+    reader_options.camera_model = camera_model
+    reader_options.single_camera = True
+
     pycolmap.extract_features(
         database_path=database_path,
         image_path=image_path,
         camera_mode=pycolmap.CameraMode.SINGLE,
-        camera_model=camera_model,
+        reader_options=reader_options,
     )
 
     pycolmap.match_exhaustive(database_path=database_path)
