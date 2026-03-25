@@ -1,19 +1,19 @@
 # =============================================================================
 # 3DGRUT API — Docker Compose
 #
-# Quick start:
-#   cp .env.example .env
-#   vim .env              # set paths for THIS machine
-#   docker compose up --build -d
+# First time:
+#   cp .env.example .env && vim .env
+#   docker compose build
+#   docker compose up -d
+#
+# After code changes (no rebuild needed):
+#   git pull && docker compose restart
 #
 # Logs:
 #   docker compose logs -f
 #
 # Swagger UI:
 #   http://localhost:8191/docs
-#
-# Health check:
-#   curl http://localhost:8191/health
 # =============================================================================
 
 services:
@@ -33,9 +33,16 @@ services:
       - "${THREEDGRUT_PORT:-8191}:8191"
 
     volumes:
-      # Persistent job data (uploads, training outputs, artifacts)
+      # Mount API source code — changes take effect on restart, no rebuild
+      - ./api:/workspace/api:ro
+      # Mount tracer fixes (JIT module loading)
+      - ./threedgut_tracer:/workspace/threedgut_tracer:ro
+      - ./threedgrt_tracer:/workspace/threedgrt_tracer:ro
+      - ./threedgrut:/workspace/threedgrut:ro
+      - ./threedgrut_playground:/workspace/threedgrut_playground:ro
+      # Persistent job data
       - ${THREEDGRUT_DATA_PATH:-./data}:/workspace/data:rw
-      # HuggingFace model cache (shared with other AI services)
+      # HuggingFace model cache
       - ${HF_CACHE_HOST_PATH:-./hf_cache}:/hf_cache:rw
       # Logs
       - ./logs:/workspace/logs:rw
@@ -47,7 +54,8 @@ services:
       - THREEDGRUT_PORT=8191
       - THREEDGRUT_HOST=0.0.0.0
       - THREEDGRUT_MAX_GPU_JOBS=${THREEDGRUT_MAX_GPU_JOBS:-1}
-      # Runtime proxy (for model downloads inside container)
+      - HYDRA_FULL_ERROR=1
+      # Runtime proxy
       - http_proxy=${HTTP_PROXY:-}
       - https_proxy=${HTTPS_PROXY:-}
       - HTTP_PROXY=${HTTP_PROXY:-}
