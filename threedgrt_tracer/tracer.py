@@ -39,8 +39,9 @@ def load_3dgrt_plugin(conf):
         except ImportError:
             from .setup_3dgrt import setup_3dgrt
 
-            setup_3dgrt(conf)
-            import lib3dgrt_cc as tdgrt  # type: ignore
+            tdgrt = setup_3dgrt(conf)
+            if tdgrt is None:
+                import lib3dgrt_cc as tdgrt  # type: ignore
         _3dgrt_plugin = tdgrt
 
 

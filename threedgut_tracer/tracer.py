@@ -42,8 +42,9 @@ def load_3dgut_plugin(conf):
         except ImportError:
             from .setup_3dgut import setup_3dgut
 
-            setup_3dgut(conf)
-            import lib3dgut_cc as tdgut  # type: ignore
+            tdgut = setup_3dgut(conf)
+            if tdgut is None:
+                import lib3dgut_cc as tdgut  # type: ignore
         _3dgut_plugin = tdgut
 
 
