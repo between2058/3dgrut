@@ -118,7 +118,7 @@ def setup_playground(conf):
 
     # Compile and load.
     source_paths = [os.path.abspath(os.path.join(os.path.dirname(__file__), fn)) for fn in source_files]
-    torch.utils.cpp_extension.load(
+    return torch.utils.cpp_extension.load(
         name="libplayground_cc",
         sources=source_paths,
         extra_cflags=cc_flags,

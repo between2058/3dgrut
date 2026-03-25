@@ -36,8 +36,9 @@ def load_playground_plugin(conf):
         except ImportError:
             from .setup_playground import setup_playground
 
-            setup_playground(conf)
-            import libplayground_cc as tdgrt  # type: ignore
+            tdgrt = setup_playground(conf)
+            if tdgrt is None:
+                import libplayground_cc as tdgrt  # type: ignore
         _playground_plugin = tdgrt
 
 

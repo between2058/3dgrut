@@ -37,8 +37,9 @@ def load_optimizer_plugin():
         except ImportError:
             from .setup_optimizers import setup_lib_optimizers_cc
 
-            setup_lib_optimizers_cc()  # Setup the C++ extension for the optimizer plugin
-            import lib_optimizers_cc as optimizers_cc
+            optimizers_cc = setup_lib_optimizers_cc()
+            if optimizers_cc is None:
+                import lib_optimizers_cc as optimizers_cc
 
         _optimizer_plugin = optimizers_cc
 
