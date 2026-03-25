@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import shutil
 from pathlib import Path
 
 from api.models import JobStatus
@@ -37,12 +38,22 @@ class MeshStep(BaseStep):
         if not ply_path.exists():
             return StepResult(success=False, error="model.ply not found for meshing")
 
+        # Check if frgs is installed
+        if not shutil.which("frgs"):
+            logger.warning(f"Job {job_id}: frgs not installed, skipping mesh generation")
+            return StepResult(success=True, data={"mesh_skipped": True})
+
         cmd = build_mesh_command(str(ply_path), str(collider_path), self.resolution)
         logger.info(f"Job {job_id}: generating collider mesh")
 
-        success, stderr = await run_mesh(cmd)
-        if not success:
-            return StepResult(success=False, error=f"Mesh generation failed: {stderr[:500]}")
+        try:
+            success, stderr = await run_mesh(cmd)
+            if not success:
+                logger.warning(f"Job {job_id}: mesh generation failed (non-critical): {stderr[:500]}")
+                return StepResult(success=True, data={"mesh_skipped": True})
+        except FileNotFoundError:
+            logger.warning(f"Job {job_id}: frgs command not found, skipping mesh generation")
+            return StepResult(success=True, data={"mesh_skipped": True})
 
         logger.info(f"Job {job_id}: mesh generation completed")
         return StepResult(success=True)
