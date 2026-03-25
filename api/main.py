@@ -34,12 +34,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         store=app.state.job_store,
         bus=app.state.event_bus,
         steps=[
-            ExtractFramesStep(
-                data_dir=s.data_dir,
-                fps=s.sharp_frames_fps,
-                num_frames=s.sharp_frames_num,
-                method=s.sharp_frames_method,
-            ),
+            ExtractFramesStep(data_dir=s.data_dir, fps=1),
             ColmapSfmStep(data_dir=s.data_dir),
             TrainGsStep(data_dir=s.data_dir, config=s.train_config),
             MeshStep(data_dir=s.data_dir, resolution=s.mesh_resolution),
