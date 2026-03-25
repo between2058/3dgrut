@@ -13,7 +13,7 @@ logger = logging.getLogger("api")
 def build_train_command(
     job_id: str,
     data_dir: str,
-    config: str = "apps/colmap_3dgut_mcmc.yaml",
+    config: str = "apps/colmap_3dgut_mcmc",
 ) -> list[str]:
     job_path = os.path.abspath(f"{data_dir}/{job_id}")
     return [

@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     sharp_frames_num: int = 300
     sharp_frames_method: str = "best-n"
     default_camera_model: str = "SIMPLE_RADIAL"
-    train_config: str = "apps/colmap_3dgut_mcmc.yaml"
+    train_config: str = "apps/colmap_3dgut_mcmc"
     train_iterations: int = 30000
     mesh_resolution: float = 0.10
 
